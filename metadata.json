@@ -1,0 +1,8 @@
+{
+  "name": "Remix: 플레이스2일차 진단기",
+  "description": "매장의 리뷰 상태를 분석하고 마케팅 솔루션 적용 시 예상 매출 성장률을 산출하는 정밀 진단 도구입니다.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
