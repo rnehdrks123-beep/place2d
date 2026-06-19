@@ -24,7 +24,11 @@ export async function generateDiagnosis(data: {
 
   if (!response.ok) {
     const errorData = await response.json().catch(() => ({}));
-    throw new Error(errorData.error || "서버 분석 중 오류가 발생했습니다.");
+    const errorMsg = errorData.error || "서버 분석 중 오류가 발생했습니다.";
+    if (errorData.details) {
+      throw new Error(`${errorMsg}\n상세 원인: ${errorData.details}`);
+    }
+    throw new Error(errorMsg);
   }
 
   return await response.json();

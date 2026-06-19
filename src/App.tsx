@@ -37,9 +37,9 @@ export default function App() {
         origin: { y: 0.6 },
         colors: ["#2563eb", "#059669", "#d97706"],
       });
-    } catch (err) {
+    } catch (err: any) {
       console.error(err);
-      setError("분석 중 오류가 발생했습니다. 잠시 후 다시 시도해주세요.");
+      setError(err.message || "분석 중 오류가 발생했습니다. 잠시 후 다시 시도해주세요.");
     } finally {
       setIsLoading(false);
     }
@@ -148,8 +148,8 @@ export default function App() {
                 </div>
 
                 {error && (
-                  <div className="p-4 bg-rose-50 border border-rose-100/80 text-rose-600 rounded-xl text-sm font-bold text-center">
-                    {error}
+                  <div className="p-5 md:p-6 bg-rose-50 border border-rose-100/80 text-rose-750 rounded-2xl text-xs md:text-sm font-semibold whitespace-pre-line text-left leading-relaxed shadow-sm">
+                    ⚠️ {error}
                   </div>
                 )}
 
