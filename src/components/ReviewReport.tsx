@@ -1,6 +1,7 @@
-import React, { useRef } from "react";
-import { Download, Sparkles, TrendingUp, Info, CheckCircle2 } from "lucide-react";
+import React, { useRef, useState } from "react";
+import { Download, Sparkles, TrendingUp, Info, CheckCircle2, FileText, Loader2, AlertCircle } from "lucide-react";
 import { toPng } from "html-to-image";
+import { jsPDF } from "jspdf";
 import { DiagnosisResult } from "../lib/gemini";
 import { motion } from "motion/react";
 
@@ -12,17 +13,109 @@ interface ReviewReportProps {
 export const ReviewReport: React.FC<ReviewReportProps> = ({ data, placeName }) => {
   const page1Ref = useRef<HTMLDivElement>(null);
   const page2Ref = useRef<HTMLDivElement>(null);
+  
+  const [isExportingPdf, setIsExportingPdf] = useState(false);
+  const [isExportingPng1, setIsExportingPng1] = useState(false);
+  const [isExportingPng2, setIsExportingPng2] = useState(false);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
-  const downloadImage = async (ref: React.RefObject<HTMLDivElement>, fileName: string) => {
-    if (ref.current === null) return;
+  // 고해상도 이미지 변환을 위한 공통 세팅
+  const getHighQualityImage = async (element: HTMLDivElement): Promise<string> => {
+    // 모바일 기기 대응을 위해 캡처 중 일시적으로 고정 넓이 스타일을 유지
+    const originalWidth = element.style.width;
+    const originalMinHeight = element.style.minHeight;
+    const originalTransform = element.style.transform;
+
     try {
-      const dataUrl = await toPng(ref.current, { cacheBust: true, pixelRatio: 2 });
-      const link = document.createElement("a");
-      link.download = fileName;
-      link.href = dataUrl;
-      link.click();
+      // 캡처 최적화 스타일 주입 (모바일에서도 가로가 잘리지 않도록 강제 세팅)
+      element.style.width = "800px";
+      element.style.minHeight = "1120px";
+      element.style.transform = "none";
+
+      const dataUrl = await toPng(element, {
+        cacheBust: true,
+        pixelRatio: 2, // 고해상도 선명도 보장
+        backgroundColor: "#ffffff",
+        style: {
+          transform: "scale(1)",
+          transformOrigin: "top left",
+        }
+      });
+
+      // 복구
+      element.style.width = originalWidth;
+      element.style.minHeight = originalMinHeight;
+      element.style.transform = originalTransform;
+
+      return dataUrl;
     } catch (err) {
-      console.error("Failed to download image", err);
+      // 에러 발생 시 원래 상태 복구 후 throw
+      element.style.width = originalWidth;
+      element.style.minHeight = originalMinHeight;
+      element.style.transform = originalTransform;
+      throw err;
+    }
+  };
+
+  // 개별 PNG 이미지 다운로드 기능
+  const downloadPng = async (ref: React.RefObject<HTMLDivElement | null>, pageNum: number) => {
+    if (!ref || !ref.current) return;
+    setErrorMessage(null);
+    
+    if (pageNum === 1) setIsExportingPng1(true);
+    else setIsExportingPng2(true);
+
+    try {
+      const dataUrl = await getHighQualityImage(ref.current);
+      const link = document.createElement("a");
+      link.download = `${placeName}_플레이스_진단리포트_page${pageNum}.png`;
+      link.href = dataUrl;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+    } catch (err: any) {
+      console.error("PNG 내보내기 오류 발생:", err);
+      setErrorMessage(`이미지 다운로드 중 오류가 발생했습니다. (원인: ${err.message || "브라우저 호환성 제약"})`);
+    } finally {
+      if (pageNum === 1) setIsExportingPng1(false);
+      else setIsExportingPng2(false);
+    }
+  };
+
+  // 통합 PDF 고해상도 생성 기능 (A4 규격, 2개 페이지 일체화)
+  const downloadPdf = async () => {
+    if (!page1Ref.current || !page2Ref.current) return;
+    setIsExportingPdf(true);
+    setErrorMessage(null);
+
+    try {
+      // 1페이지 고화질 캡처 진행
+      const imgData1 = await getHighQualityImage(page1Ref.current);
+      
+      // 2페이지 고화질 캡처 진행
+      const imgData2 = await getHighQualityImage(page2Ref.current);
+
+      // jsPDF 생성: p(portrait), mm(밀리미터), a4 규격
+      const pdf = new jsPDF({
+        orientation: "p",
+        unit: "mm",
+        format: "a4"
+      });
+
+      // A4 가로세로 규격: 210mm x 297mm
+      pdf.addImage(imgData1, "PNG", 0, 0, 210, 297, undefined, "FAST");
+      
+      pdf.addPage();
+      pdf.addImage(imgData2, "PNG", 0, 0, 210, 297, undefined, "FAST");
+
+      // 파일명 공백 및 특수문자 제거 후 안전한 이름으로 저장
+      const safePlaceName = placeName.replace(/[^a-zA-Z0-9가-힣]/g, "_");
+      pdf.save(`${safePlaceName}_네이버플레이스_진단보고서_DyMonth.pdf`);
+    } catch (err: any) {
+      console.error("PDF 생성 오류 발생:", err);
+      setErrorMessage(`PDF 통합 보고서 생성 중 오류가 발생했습니다. (원인: ${err.message || "메모리 부족 또는 디바이스 미지원"})`);
+    } finally {
+      setIsExportingPdf(false);
     }
   };
 
@@ -42,11 +135,72 @@ export const ReviewReport: React.FC<ReviewReportProps> = ({ data, placeName }) =
   ];
 
   const renderHTML = (html: string) => {
+    // 오프라인 / 백엔드 상관없이 span 태그가 정상 렌더링되도록 가드
+    if (!html) return <span>분석 진행 중입니다...</span>;
     return <div dangerouslySetInnerHTML={{ __html: html }} />;
   };
 
   return (
-    <div className="flex flex-col items-center gap-12 py-6 w-full max-w-4xl mx-auto px-4">
+    <div className="flex flex-col items-center gap-10 py-6 w-full max-w-4xl mx-auto px-4 select-none">
+      
+      {/* 알림 배너 */}
+      {data.isSimulated && (
+        <div className="w-full bg-amber-50 border-2 border-amber-200/80 rounded-2xl p-5 flex items-start gap-3.5 shadow-sm">
+          <Info className="w-5 h-5 text-amber-600 mt-0.5 shrink-0" />
+          <div>
+            <h4 className="text-amber-900 font-extrabold text-sm">실시간 초고속 진단 모드 작동 중</h4>
+            <p className="text-amber-800 text-xs mt-1 font-semibold leading-relaxed">
+              현재 정적 호스팅 배포(Netlify/Vercel) 또는 서버 대기 상태입니다. 입력하신 플레이스 수치 가중치를 분석하여 지능형 알고리즘 기반 맞춤 보고서를 즉각 생성하였습니다.
+            </p>
+          </div>
+        </div>
+      )}
+
+      {/* 에러 발생 안내 */}
+      {errorMessage && (
+        <div className="w-full bg-rose-50 border-2 border-rose-200 rounded-2xl p-5 flex items-center gap-3.5 shadow-sm text-rose-800 font-semibold text-sm">
+          <AlertCircle className="w-5 h-5 text-rose-600 shrink-0" />
+          <div className="flex-1">
+            <span className="font-extrabold block">내보내기 장애 해결 가이드</span>
+            <span className="text-xs text-rose-700 font-medium leading-relaxed mt-0.5 block">{errorMessage}</span>
+          </div>
+          <button 
+            onClick={() => setErrorMessage(null)}
+            className="text-xs bg-rose-100 hover:bg-rose-200 px-3 py-1.5 rounded-lg text-rose-800 font-bold transition-all"
+          >
+            닫기
+          </button>
+        </div>
+      )}
+
+      {/* 🌟 최상단 통합 PDF 내보내기 마스터 컨트롤 바 */}
+      <div className="w-full bg-gradient-to-r from-emerald-600 to-teal-600 p-5 rounded-3xl shadow-xl shadow-emerald-600/10 flex flex-col md:flex-row items-center justify-between gap-4">
+        <div className="text-white text-center md:text-left">
+          <h3 className="text-lg font-black tracking-tight flex items-center justify-center md:justify-start gap-2">
+            <Sparkles className="w-5 h-5 text-yellow-300 animate-pulse" /> 사장님 보고서 저장 센터
+          </h3>
+          <p className="text-emerald-100 text-xs mt-1 font-medium">A4 최적 규격으로 완벽하게 조율된 PDF 및 PNG를 원클릭으로 출력하세요.</p>
+        </div>
+
+        <button
+          onClick={downloadPdf}
+          disabled={isExportingPdf || isExportingPng1 || isExportingPng2}
+          className="w-full md:w-auto bg-white hover:bg-emerald-50 text-emerald-800 font-black text-sm md:text-base px-7 py-3.5 rounded-2xl shadow-lg transition-all active:scale-[0.98] flex items-center justify-center gap-2.5 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+        >
+          {isExportingPdf ? (
+            <>
+              <Loader2 className="w-5 h-5 animate-spin text-emerald-700" />
+              A4 통합 PDF 빌드 중...
+            </>
+          ) : (
+            <>
+              <FileText className="w-5 h-5 text-emerald-700" />
+              📄 PDF 종합 리포트 한번에 다운로드
+            </>
+          )}
+        </button>
+      </div>
+
       {/* Page 1: Diagnosis */}
       <motion.div
         initial={{ opacity: 0, y: 20 }}
@@ -99,7 +253,7 @@ export const ReviewReport: React.FC<ReviewReportProps> = ({ data, placeName }) =
               <div className="text-[#065f46] font-medium text-sm leading-relaxed">{renderHTML(data.visitImprove)}</div>
             </div>
 
-            <div className="bg-slate-50/80 border border-slate-200/60 p-6 rounded-2xl shadow-inner">
+            <div className="bg-slate-55/80 border border-slate-200/60 p-6 rounded-2xl shadow-inner">
               <h4 className="text-emerald-700 font-bold text-sm tracking-wide mb-4 uppercase">🤖 AI 추천 고객 감동 답글 예시</h4>
               <div className="text-slate-700 leading-relaxed text-sm font-medium">{renderHTML(data.aiReply)}</div>
             </div>
@@ -120,11 +274,22 @@ export const ReviewReport: React.FC<ReviewReportProps> = ({ data, placeName }) =
             </div>
           </div>
         </div>
+
         <button
-          onClick={() => downloadImage(page1Ref, `${placeName}_1_진단리포트.png`)}
-          className="mt-4 w-full flex items-center justify-center gap-2.5 px-6 py-4.5 bg-gradient-to-r from-emerald-500 to-emerald-600 hover:from-emerald-450 hover:to-emerald-555 text-white font-black rounded-2xl shadow-lg transition-all hover:scale-[1.01] cursor-pointer"
+          onClick={() => downloadPng(page1Ref, 1)}
+          disabled={isExportingPdf || isExportingPng1}
+          className="mt-4 w-full flex items-center justify-center gap-2.5 px-6 py-4.5 bg-gradient-to-r from-emerald-500 to-emerald-600 hover:from-emerald-450 hover:to-emerald-555 text-white font-black rounded-2xl shadow-lg transition-all hover:scale-[1.01] cursor-pointer disabled:opacity-50"
         >
-          <Download className="w-5 h-5 text-white" /> 📸 1. 진단 리포트 다운로드 (PNG)
+          {isExportingPng1 ? (
+            <>
+              <Loader2 className="w-5 h-5 animate-spin text-white" />
+              이미지 변환 및 다운로드 중...
+            </>
+          ) : (
+            <>
+              <Download className="w-5 h-5 text-white" /> 📸 1. 진단 리포트 다운로드 (PNG)
+            </>
+          )}
         </button>
       </motion.div>
 
@@ -167,7 +332,7 @@ export const ReviewReport: React.FC<ReviewReportProps> = ({ data, placeName }) =
               ))}
             </ul>
 
-            <div className="mt-8 bg-white p-6 rounded-2xl border border-dashed border-rose-350 text-center shadow-lg relative overflow-hidden group">
+            <div className="mt-8 bg-white p-6 rounded-2xl border border-dashed border-rose-300 text-center shadow-lg relative overflow-hidden group">
               <span className="text-slate-400 font-bold line-through text-base mr-3">400만원 (정상가)</span>
               <strong className="text-rose-600 text-3xl font-black mr-2">➔ 180만원</strong>
               <span className="text-rose-500 font-bold text-sm bg-rose-50 px-3 py-1 rounded-full border border-rose-100 inline-block">(실천 약속 멤버십가)</span>
@@ -189,11 +354,22 @@ export const ReviewReport: React.FC<ReviewReportProps> = ({ data, placeName }) =
             </div>
           </div>
         </div>
+
         <button
-          onClick={() => downloadImage(page2Ref, `${placeName}_2_솔루션제안서.png`)}
-          className="mt-4 w-full flex items-center justify-center gap-2.5 px-6 py-4.5 bg-white hover:bg-slate-50 text-slate-800 font-bold rounded-2xl shadow-md border border-slate-200 cursor-pointer transition-all hover:scale-[1.01]"
+          onClick={() => downloadPng(page2Ref, 2)}
+          disabled={isExportingPdf || isExportingPng2}
+          className="mt-4 w-full flex items-center justify-center gap-2.5 px-6 py-4.5 bg-white hover:bg-slate-50 text-slate-800 font-bold rounded-2xl shadow-md border border-slate-200 cursor-pointer transition-all hover:scale-[1.01] disabled:opacity-50"
         >
-          <Download className="w-5 h-5 text-emerald-600" /> 📸 2. 마케팅 제안서 다운로드 (PNG)
+          {isExportingPng2 ? (
+            <>
+              <Loader2 className="w-5 h-5 animate-spin text-emerald-650" />
+              이미지 변환 및 다운로드 중...
+            </>
+          ) : (
+            <>
+              <Download className="w-5 h-5 text-emerald-600" /> 📸 2. 마케팅 제안서 다운로드 (PNG)
+            </>
+          )}
         </button>
       </motion.div>
     </div>
